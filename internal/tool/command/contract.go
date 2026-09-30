@@ -27,6 +27,7 @@ func InputSchema(name string) (map[string]any, bool) {
 		props["yield_time_ms"] = boundedIntProp("Foreground wait threshold for execution_mode=auto. Defaults to 5000 and is capped at 30000 milliseconds.", 0, 30000)
 		props["max_output_bytes"] = boundedIntProp("Maximum output bytes. Defaults to 65536 and is capped at 4194304.", 1, MaxOutputBytes)
 		props["stdin"] = stringProp("Initial stdin.")
+		props["stdin_mode"] = map[string]any{"type": "string", "description": "Initial stdin delivery mode. Defaults to auto; auto may use a pipe for small input or a private spool file for larger non-TTY input.", "enum": []string{"auto", "pipe", "file"}}
 		props["tty"] = boolProp("Keep stdin open.")
 		required = []string{"cmd"}
 	case ToolSessionObserve:
@@ -61,9 +62,19 @@ func OutputSchema(name string) (map[string]any, bool) {
 		"stderr":           stringProp("Captured stderr segment."),
 		"command_ok":       boolProp("Whether a completed command exited successfully. Omitted while the command is still running."),
 		"command_error":    stringProp("Command process error when execution did not succeed."),
+		"command_error_code": stringProp("Stable command/runtime error code when available."),
 		"exit_code":        intProp("Process exit code, when available."),
 		"elapsed_ms":       intProp("Session elapsed milliseconds."),
 		"timed_out":        boolProp("Whether the command timed out."),
+		"process_status":    stringProp("Observed child process state such as running or exited."),
+		"cleanup_required":  boolProp("Whether a failed command still requires explicit session cleanup."),
+		"stdin_mode_requested": stringProp("Requested initial stdin delivery mode."),
+		"stdin_mode_used":      stringProp("Actual initial stdin delivery mode."),
+		"stdin_expected_bytes": intProp("UTF-8 byte count expected for initial stdin."),
+		"stdin_written_bytes":  intProp("UTF-8 byte count successfully delivered for initial stdin."),
+		"stdin_completed":      boolProp("Whether initial stdin delivery completed."),
+		"stdin_error_code":     stringProp("Stable stdin delivery error code when available."),
+		"stdin_error":          stringProp("Stdin delivery error summary when available."),
 	}
 	switch name {
 	case ToolExecCommand:

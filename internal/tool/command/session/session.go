@@ -61,6 +61,14 @@ type Session struct {
 	stderrDroppedBytes int
 	stdoutCursor       int
 	stderrCursor       int
+	stdinConfigured    bool
+	stdinModeRequested string
+	stdinModeUsed      string
+	stdinExpectedBytes int
+	stdinWrittenBytes  int
+	stdinCompleted     bool
+	stdinErrorCode     string
+	stdinError         string
 }
 
 type Snapshot struct {
@@ -89,6 +97,14 @@ type Snapshot struct {
 	Runtime            string
 	WSLDistribution    string
 	Workdir            string
+	StdinConfigured    bool
+	StdinModeRequested string
+	StdinModeUsed      string
+	StdinExpectedBytes int
+	StdinWrittenBytes  int
+	StdinCompleted     bool
+	StdinErrorCode     string
+	StdinError         string
 }
 
 type Store struct {
@@ -471,11 +487,53 @@ func (s *Session) SetExecutionContext(execution ExecutionContext) {
 }
 
 func (s *Session) Write(text string) error {
-	_, err := io.WriteString(s.Stdin, text)
+	_, err := s.WriteBytes([]byte(text))
 	return err
 }
 
-func (s *Session) CloseStdin() error { return s.Stdin.Close() }
+func (s *Session) WriteBytes(data []byte) (int, error) {
+	if s.Stdin == nil {
+		return 0, io.ErrClosedPipe
+	}
+	total := 0
+	for total < len(data) {
+		n, err := s.Stdin.Write(data[total:])
+		total += n
+		if err != nil {
+			return total, err
+		}
+		if n == 0 {
+			return total, io.ErrShortWrite
+		}
+	}
+	return total, nil
+}
+
+func (s *Session) CloseStdin() error {
+	if s.Stdin == nil {
+		return nil
+	}
+	return s.Stdin.Close()
+}
+
+func (s *Session) SetStdinDelivery(
+	configured bool,
+	requested, used string,
+	expected, written int,
+	completed bool,
+	errorCode, errorMessage string,
+) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.stdinConfigured = configured
+	s.stdinModeRequested = requested
+	s.stdinModeUsed = used
+	s.stdinExpectedBytes = expected
+	s.stdinWrittenBytes = written
+	s.stdinCompleted = completed
+	s.stdinErrorCode = errorCode
+	s.stdinError = errorMessage
+}
 
 func (s *Session) WaitError() error {
 	s.mu.Lock()
@@ -542,6 +600,9 @@ func (s *Session) snapshot(status string, maxBytes int, advance bool) Snapshot {
 		StderrTruncated: maxBytes > 0 && len([]byte(stderrSegment)) > maxBytes,
 		Completed:       s.completed, ExitCode: s.exitCode, CommandOK: s.exitCode == 0 && !s.TimedOut,
 		Runtime: s.execution.Runtime, WSLDistribution: s.execution.Distribution, Workdir: s.execution.Workdir,
+		StdinConfigured: s.stdinConfigured, StdinModeRequested: s.stdinModeRequested, StdinModeUsed: s.stdinModeUsed,
+		StdinExpectedBytes: s.stdinExpectedBytes, StdinWrittenBytes: s.stdinWrittenBytes,
+		StdinCompleted: s.stdinCompleted, StdinErrorCode: s.stdinErrorCode, StdinError: s.stdinError,
 	}
 }
 

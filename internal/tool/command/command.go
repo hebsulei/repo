@@ -54,6 +54,11 @@ func (svc *Service) Exec(ctx context.Context, request ExecRequest) (Result, erro
 	if err != nil {
 		return nil, err
 	}
+	stdinPrep, err := prepareInitialStdin(svc.config().AgentDockHome, request)
+	if err != nil {
+		return nil, err
+	}
+	defer stdinPrep.cleanupNow()
 	invocation, err := svc.prepareCommandInvocation(commandCtx, request)
 	if err != nil {
 		return nil, err
@@ -89,6 +94,7 @@ func (svc *Service) Exec(ctx context.Context, request ExecRequest) (Result, erro
 	// 因此长任务只受 timeout_ms 和 session_act action=kill/kill_all 控制。
 	startStartedAt := time.Now()
 	s, sandboxStatus, err := invocation.start(commandCtx, timeout, tty, func(command *exec.Cmd) (func(), session.PreparationStatus) {
+		stdinPrep.apply(command)
 		// AgentDock 不额外过滤命令，实际权限边界由所选运行环境决定。
 		privilegeWarning := "exec_command runs with the AgentDock process OS user privileges"
 		if invocation.execution.Runtime == "wsl" {
@@ -103,7 +109,18 @@ func (svc *Service) Exec(ctx context.Context, request ExecRequest) (Result, erro
 	if err != nil {
 		return nil, err
 	}
+	stdinPrep.cleanupAfterStart(s.Done)
 	s.SetExecutionContext(invocation.execution)
+	s.SetStdinDelivery(
+		stdinPrep.configured,
+		string(stdinPrep.requested),
+		string(stdinPrep.used),
+		stdinPrep.expected,
+		stdinPrep.written,
+		stdinPrep.completed,
+		"",
+		"",
+	)
 	if invocation.skillRelease != nil {
 		skillReleaseHandled = true
 		release := invocation.skillRelease
@@ -112,18 +129,54 @@ func (svc *Service) Exec(ctx context.Context, request ExecRequest) (Result, erro
 			release()
 		}()
 	}
-	if request.Stdin != "" {
-		if err := s.Write(request.Stdin); err != nil {
-			s.Kill()
+	if stdinPrep.configured && stdinPrep.used == stdinModePipe {
+		written, writeErr := s.WriteBytes(stdinPrep.data)
+		stdinPrep.written = written
+		stdinPrep.completed = writeErr == nil && written == stdinPrep.expected
+		if writeErr != nil || written != stdinPrep.expected {
+			if writeErr == nil {
+				writeErr = io.ErrShortWrite
+			}
+			s.SetStdinDelivery(
+				true,
+				string(stdinPrep.requested),
+				string(stdinPrep.used),
+				stdinPrep.expected,
+				written,
+				false,
+				"STDIN_DELIVERY_FAILED",
+				writeErr.Error(),
+			)
+			_, _ = s.Kill()
 			s.Cancel()
-			return nil, fmt.Errorf("write command stdin: %w", err)
+			return nil, toolErrorDetails(
+				"STDIN_DELIVERY_FAILED",
+				"failed to deliver complete command stdin",
+				"runtime",
+				stdinDiagnosticDetails(stdinPrep, written, "STDIN_DELIVERY_FAILED", writeErr),
+			)
 		}
+		s.SetStdinDelivery(
+			true,
+			string(stdinPrep.requested),
+			string(stdinPrep.used),
+			stdinPrep.expected,
+			written,
+			true,
+			"",
+			"",
+		)
 	}
 	if !tty {
 		if err := s.CloseStdin(); err != nil && !errors.Is(err, os.ErrClosed) {
-			s.Kill()
+			_, _ = s.Kill()
 			s.Cancel()
-			return nil, fmt.Errorf("close command stdin: %w", err)
+			return nil, toolErrorDetails(
+				"STDIN_DELIVERY_FAILED",
+				"failed to close command stdin",
+				"runtime",
+				stdinDiagnosticDetails(stdinPrep, stdinPrep.written, "STDIN_DELIVERY_FAILED", err),
+			)
 		}
 	}
 
@@ -242,6 +295,19 @@ func snapshotResult(snapshot session.Snapshot) Result {
 	}
 	if snapshot.Workdir != "" {
 		result["workdir"] = snapshot.Workdir
+	}
+	if snapshot.StdinConfigured {
+		result["stdin_mode_requested"] = snapshot.StdinModeRequested
+		result["stdin_mode_used"] = snapshot.StdinModeUsed
+		result["stdin_expected_bytes"] = snapshot.StdinExpectedBytes
+		result["stdin_written_bytes"] = snapshot.StdinWrittenBytes
+		result["stdin_completed"] = snapshot.StdinCompleted
+		if snapshot.StdinErrorCode != "" {
+			result["stdin_error_code"] = snapshot.StdinErrorCode
+		}
+		if snapshot.StdinError != "" {
+			result["stdin_error"] = snapshot.StdinError
+		}
 	}
 	return result
 }
