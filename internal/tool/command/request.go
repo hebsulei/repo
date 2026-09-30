@@ -18,6 +18,7 @@ type ExecRequest struct {
 	YieldTimeMS    *int              `json:"yield_time_ms,omitempty"`
 	MaxOutputBytes *int              `json:"max_output_bytes,omitempty"`
 	Stdin          string            `json:"stdin,omitempty"`
+	StdinMode      string            `json:"stdin_mode,omitempty"`
 	TTY            bool              `json:"tty,omitempty"`
 }
 

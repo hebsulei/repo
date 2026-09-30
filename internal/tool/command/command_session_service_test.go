@@ -210,6 +210,71 @@ func TestExecCommandCancelledForegroundWaitIsUnsuccessful(t *testing.T) {
 	}
 }
 
+func TestExecCommandRequestCancellationDetachesRunningSession(t *testing.T) {
+	service, _ := newCommandTestService(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(30 * time.Millisecond)
+		cancel()
+	}()
+
+	result, err := service.execArgs(ctx, map[string]any{
+		"cmd":            stdinProbeCommand(t),
+		"env":            map[string]any{"GO_WANT_COMMAND_STDIN_PROBE": "1", "GO_WANT_COMMAND_STDIN_DELAY_MS": "300"},
+		"execution_mode": "sync",
+		"timeout_ms":     5000,
+	})
+	if err != nil {
+		t.Fatalf("execCommand() error = %v", err)
+	}
+	if result["status"] != "running" ||
+		result["session_reason"] != "DETACHED_RUNNING" ||
+		result["process_status"] != "running" ||
+		result["timed_out"] != false {
+		t.Fatalf("detached result = %#v", result)
+	}
+	sessionID, _ := result["session_id"].(string)
+	if sessionID == "" {
+		t.Fatalf("detached result missing session_id: %#v", result)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		status, statusErr := service.sessionStatusArgs(map[string]any{"session_id": sessionID})
+		if statusErr == nil && status["status"] == "exited" {
+			if status["command_ok"] != true || status["process_status"] != "exited" {
+				t.Fatalf("final detached session = %#v", status)
+			}
+			return
+		}
+		if statusErr != nil {
+			t.Fatalf("sessionStatus() error = %v", statusErr)
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("detached session did not complete: %#v", status)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+func TestExecCommandHardTimeoutRemainsTerminal(t *testing.T) {
+	service, _ := newCommandTestService(t)
+	result, err := service.execArgs(context.Background(), map[string]any{
+		"cmd":            stdinProbeCommand(t),
+		"env":            map[string]any{"GO_WANT_COMMAND_STDIN_PROBE": "1", "GO_WANT_COMMAND_STDIN_DELAY_MS": "500"},
+		"execution_mode": "sync",
+		"timeout_ms":     50,
+	})
+	if err != nil {
+		t.Fatalf("execCommand() error = %v", err)
+	}
+	if result["status"] != "timeout" ||
+		result["timed_out"] != true ||
+		result["process_status"] != "exited" {
+		t.Fatalf("hard timeout result = %#v", result)
+	}
+}
+
 func TestExecCommandAsyncOnlyRecordsStartStage(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("test command uses POSIX sleep")

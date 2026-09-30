@@ -27,9 +27,15 @@ func startStandardRunner(cmd *exec.Cmd, stdout, stderr io.Writer) (*standardRunn
 	// 但关闭 os/exec 自带的直接子进程 Cancel，运行期取消由 Session watcher 处理。
 	cmd.Cancel = nil
 	cmd.WaitDelay = 0
-	stdin, err := cmd.StdinPipe()
-	if err != nil {
-		return nil, err
+	var stdin io.WriteCloser
+	if cmd.Stdin == nil {
+		pipe, err := cmd.StdinPipe()
+		if err != nil {
+			return nil, err
+		}
+		stdin = pipe
+	} else {
+		stdin = closedWriteCloser{}
 	}
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
