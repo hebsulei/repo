@@ -1,0 +1,30 @@
+name: tmp-agentdock-stdin-ci
+
+on:
+  push:
+    branches:
+      - tmp/agentdock-stdin-reliability-20261001
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Go version
+        run: go version
+      - name: Command package tests
+        run: go test ./internal/tool/command -count=1 -v
+      - name: Full repository tests
+        run: go test ./... -count=1
