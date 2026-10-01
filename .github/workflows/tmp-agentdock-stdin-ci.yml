@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   test:
@@ -28,3 +28,27 @@ jobs:
         run: go test ./internal/tool/command -count=1 -v
       - name: Full repository tests
         run: go test ./... -count=1
+
+  canary_asset:
+    needs: test
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Build Windows canary
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path dist -Force | Out-Null
+          go build -trimpath -o dist/agentdock.exe ./cmd/agentdock
+          Compress-Archive -Path dist/agentdock.exe -DestinationPath dist/agentdock-stdin-canary-win-amd64.zip -Force
+          Get-FileHash dist/agentdock-stdin-canary-win-amd64.zip -Algorithm SHA256
+      - name: Publish temporary prerelease
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete tmp-agentdock-stdin-canary-20261001 --cleanup-tag --yes 2>$null
+          gh release create tmp-agentdock-stdin-canary-20261001 dist/agentdock-stdin-canary-win-amd64.zip --target "${{ github.sha }}" --prerelease --title "Temporary AgentDock stdin canary" --notes "Temporary canary artifact for H00 validation. Not a production release."
